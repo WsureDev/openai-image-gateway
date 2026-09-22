@@ -1,0 +1,29 @@
+{
+  "name": "openai-image-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/src/main.js",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "format": "prettier --write src test scripts contracts README.md package.json tsconfig.json --ignore-unknown",
+    "format:check": "prettier --check src test contracts README.md package.json tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "busboy": "^1.6.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/node": "^24.0.0",
+    "openai": "^6.0.0",
+    "prettier": "3.6.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,56 @@
+name: openai-image-gateway
+
+services:
+  gateway:
+    image: openai-image-gateway:0.1.0
+    build:
+      context: .
+      network: ${GATEWAY_BUILD_NETWORK:-default}
+      args:
+        HTTP_PROXY: ${GATEWAY_BUILD_PROXY:-}
+        HTTPS_PROXY: ${GATEWAY_BUILD_PROXY:-}
+    container_name: openai-image-gateway
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      GATEWAY_GENERATION_TOKEN: ${GATEWAY_GENERATION_TOKEN:?Set generation token}
+      GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:?Set enrollment token}
+      GATEWAY_MANAGEMENT_TOKEN: ${GATEWAY_MANAGEMENT_TOKEN:?Set management token}
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:?Set external URL}
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: "8188"
+      GATEWAY_STATE_PATH: /data/gateway.sqlite
+      GATEWAY_ALLOWED_WORKER_ORIGINS: ${GATEWAY_ALLOWED_WORKER_ORIGINS:-}
+    ports:
+      - "${GATEWAY_PUBLISH_IP:-127.0.0.1}:${GATEWAY_PUBLISH_PORT:-54160}:8188"
+    volumes:
+      - gateway-state:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8188/livez', {signal: AbortSignal.timeout(3000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  gateway-state:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${GATEWAY_SUBNET:-10.253.80.0/24}

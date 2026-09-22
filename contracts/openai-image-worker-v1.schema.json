@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenAI Image Worker Protocol v1",
+  "description": "Project-owned auxiliary worker protocol; not an official OpenAI control protocol.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/registration"
+    },
+    {
+      "$ref": "#/$defs/heartbeat"
+    },
+    {
+      "$ref": "#/$defs/events"
+    }
+  ],
+  "$defs": {
+    "registration": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": "openai-image-worker/v1"
+        },
+        "worker_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+        },
+        "instance_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+        },
+        "endpoint": {
+          "type": "object",
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "protocol": {
+              "const": "openai-image/v1"
+            },
+            "api_token": {
+              "type": "string",
+              "minLength": 24,
+              "maxLength": 512
+            }
+          },
+          "required": ["base_url", "protocol", "api_token"]
+        },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": ["images.generations", "images.edits"]
+                }
+              },
+              "streaming": {
+                "type": "boolean",
+                "default": false
+              },
+              "estimated_duration_ms": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 86400000
+              },
+              "metadata": {
+                "type": "object"
+              }
+            },
+            "required": ["id", "operations"]
+          }
+        },
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "slots": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "max_queue": {
+              "const": 0
+            }
+          },
+          "required": ["slots", "max_queue"]
+        },
+        "resources": {
+          "type": "object"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["protocol_version", "worker_id", "instance_id", "endpoint", "models", "capacity"]
+    },
+    "heartbeat": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "enum": ["starting", "ready", "busy", "draining", "offline"]
+        },
+        "load": {
+          "type": "object",
+          "properties": {
+            "in_flight": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "queue_depth": {
+              "const": 0
+            }
+          },
+          "required": ["in_flight", "queue_depth"]
+        },
+        "resources": {
+          "type": "object"
+        }
+      },
+      "required": ["lease_id", "sequence", "state", "load"]
+    },
+    "events": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "task_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+              },
+              "state": {
+                "enum": ["running", "succeeded", "failed", "uncertain"]
+              },
+              "occurred_at": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["sequence", "task_id", "state", "occurred_at"]
+          }
+        }
+      },
+      "required": ["lease_id", "events"]
+    }
+  }
+}

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { GatewayService } from '../dist/src/gateway.js';
 import { StateStore } from '../dist/src/store.js';
 import { buildServer as buildGateway } from '../dist/src/server.js';
@@ -104,9 +105,47 @@ try {
   assert.equal(calls, 6);
   assert.equal(new Set(gateway.jobs().map((j) => j.worker_id)).size, 3);
   await until(() => store.events().filter((e) => e.state === 'succeeded').length === 6);
+  const leases = adapters.map(({ service }) => {
+    const worker = gateway.registry.workers.get(service.config.worker_id);
+    return { id: worker.lease_id, sequence: worker.sequence };
+  });
+  for (const { service } of adapters) {
+    const direct = await fetch(service.config.public_url + '/v1/images/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'fake-image', prompt: 'local request' }),
+    });
+    assert.equal(direct.status, 200);
+    await direct.arrayBuffer();
+    const db = new DatabaseSync(service.config.state_path);
+    db.prepare('INSERT INTO outbox(doc) VALUES(?)').run(
+      JSON.stringify({
+        task_id: 'unassigned-event',
+        state: 'succeeded',
+        occurred_at: Date.now(),
+      }),
+    );
+    db.close();
+  }
+  await until(() =>
+    adapters.every(({ service }, index) => {
+      const worker = gateway.registry.workers.get(service.config.worker_id);
+      return (
+        service.tasks.deliveryStatus().rejected === 1 &&
+        service.tasks.deliveryStatus().pending === 0 &&
+        worker.sequence >= leases[index].sequence + 2
+      );
+    }),
+  );
+  assert.equal(calls, 9);
+  assert.equal(gateway.jobs().length, 6);
+  adapters.forEach(({ service }, index) => {
+    assert.equal(gateway.registry.workers.get(service.config.worker_id).lease_id, leases[index].id);
+    assert.equal(service.tasks.rejectedEvents()[0].reason, 'task_owner_mismatch');
+  });
   assert.ok(!JSON.stringify(gateway.workerSnapshots()).includes(token));
   console.log(
-    'PASS: three independent Adapter runtimes self-register; six jobs execute; durable task events arrive. No model runtime contacted.',
+    'PASS: three Adapters, six Gateway jobs, three local jobs, rejected-event isolation and stable leases. No model runtime contacted.',
   );
 } finally {
   for (const { service, http } of adapters) {

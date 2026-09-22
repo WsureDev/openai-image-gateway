@@ -81,9 +81,13 @@ state 为 starting、ready、busy、draining 或 offline。序号在租约中严
 
 事件序号与心跳序号独立。Adapter 使用持久化 outbox 重发未确认事件，Gateway 按 worker_id、instance_id、sequence 去重。任务必须属于该 worker 实例。收到完成事件后仍需确认结果，才释放任务槽。
 
+Adapter 仅为 Gateway 派发的任务创建上报事件，直连任务保存在本地。Adapter 逐条提交并确认事件，accepted=1 表示新收录，accepted=0 表示已收录。task_owner_mismatch 或 invalid_events 会隔离对应事件，保留任务和拒绝记录并继续发送其他事件；未知错误、网络错误和不完整确认保持待重试。只有 expired_lease、unknown_worker、stale_sequence 触发重新注册。
+
 ## 查询与恢复
 
 Adapter 提供 `/livez`、`/readyz`、`/health`、`/worker/v1/status`、`/worker/v1/tasks`、`/worker/v1/tasks/{id}` 和 `/metrics`，全部无需凭据。单任务查询包含状态，以及完成时的 `result:{status,content_type,body}`。
+
+`/worker/v1/status` 提供 event_delivery.pending/rejected 和 control 状态；`/worker/v1/events/rejected` 返回最近的拒绝事件、原因和时间。事件隔离不修改推理结果或释放不确定任务的槽位。
 
 Gateway 持久化队列、任务、输入、结果和调度决策。未确认执行在重启后进入 uncertain，通过原 worker 实例的任务查询恢复结果。超时、404、实例不匹配都不能证明任务没有执行，不自动重新推理；相关槽保持预留，避免重复生成。
 

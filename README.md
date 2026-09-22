@@ -25,7 +25,7 @@ node scripts/adapter-contract-smoke.mjs /path/to/openai-image-worker-adapter
 
 ## 配置与运行
 
-生产部署使用仓库根目录的标准 `compose.yaml`。复制 `.env.example` 为 `.env`，填入三组不同的强随机凭据；将 `GATEWAY_PUBLISH_IP` 和 `GATEWAY_PUBLIC_URL` 设为局域网可访问的本机地址：
+生产部署使用仓库根目录的标准 `compose.yaml`。复制 `.env.example` 为 `.env`，填入两组不同的客户端/管理凭据；将 `GATEWAY_PUBLISH_IP` 和 `GATEWAY_PUBLIC_URL` 设为局域网可访问的本机地址：
 
 ```bash
 docker compose config --quiet
@@ -56,7 +56,6 @@ node --env-file=.env dist/src/main.js
 | 配置                              | 含义                                          |
 | --------------------------------- | --------------------------------------------- |
 | GATEWAY_GENERATION_TOKEN          | OpenAI 图片客户端凭据，至少 24 字符           |
-| GATEWAY_ENROLLMENT_TOKEN          | Worker 注册凭据，至少 24 字符                 |
 | GATEWAY_MANAGEMENT_TOKEN          | 管理/MCP 凭据，至少 24 字符                   |
 | GATEWAY_STATE_PATH                | SQLite 文件，默认 `./data/gateway.sqlite`     |
 | GATEWAY_PUBLIC_URL                | 返回图片 URL 的外部地址                       |
@@ -81,6 +80,10 @@ curl http://127.0.0.1:8188/v1/images/generations \
 
 客户端只需要 Gateway 的 base URL、API key、model ID。未知或没有在线可用能力的模型返回 503；忙碌但在线的模型进入持久队列。`n` 在一个 worker 中执行整个请求，不等同于跨卡 batch。多个请求可并行使用三张 GPU。
 
+## 内部调用
+
+worker 使用 `openai-image-worker/v1` 自主注册，不需要注册 token。心跳和事件也无需 Authorization；Gateway 调用 Adapter 时不附带或转发客户端凭据。Adapter 只需配置 Gateway URL、自身可达地址和 worker ID。租约/任务归属校验继续保证调度正确性。
+
 ## 管理和 MCP
 
 管理 REST：`/gateway/v1/workers`、`/gateway/v1/status`、`/gateway/v1/jobs`、`/gateway/v1/jobs/{id}`。任务查询不返回 prompt、输入文件和凭据。
@@ -99,8 +102,8 @@ curl http://127.0.0.1:8188/v1/images/generations \
 - 任务和输入/结果暂不自动清理，属于本地 MVP 的持久历史；大规模长期部署前需增加保留策略、磁盘配额和清理作业。图片访问有过期时间，但过期 BLOB 暂未做垃圾回收。
 - SQLite 不用于 Gateway 多副本 HA。完整响应和有限大小的上传会进入内存；初始目标是少量 GPU 的局域网集群。
 
-[统一 Worker 协议](contracts/openai-image-worker-v1.md) / [JSON Schema](contracts/openai-image-worker-v1.schema.json)。
+[统一 Worker 协议](contracts/worker-protocol.md) / [JSON Schema](contracts/worker-protocol.schema.json)。
 
-## 交付状态
+## 当前部署
 
-Gateway 已完成镜像构建、标准 Compose 部署和实际 HTTP/MCP 验收。部署凭据和本机发布地址保存在被 Git 忽略的 `.env`。现有 qwen-image API、ComfyUI 容器和模型进程未改动，Adapter 尚未部署；真实 Qwen 优化后负载的对接和 GPU 性能验收仍待进行。
+Gateway 和 Adapter 由 Compose 运行，worker 自主注册并上报状态。对外入口、凭据和发布地址来自 `.env`，该文件不进入 Git 或离线包。日常使用与接口验证见 [VALIDATION.md](VALIDATION.md)。

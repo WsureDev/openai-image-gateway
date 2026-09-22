@@ -15,7 +15,6 @@ services:
     stop_grace_period: 30s
     environment:
       GATEWAY_GENERATION_TOKEN: ${GATEWAY_GENERATION_TOKEN:?Set generation token}
-      GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:?Set enrollment token}
       GATEWAY_MANAGEMENT_TOKEN: ${GATEWAY_MANAGEMENT_TOKEN:?Set management token}
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:?Set external URL}
       GATEWAY_HOST: 0.0.0.0

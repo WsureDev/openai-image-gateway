@@ -1,7 +1,6 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   ApiError,
-  requireToken,
   origin,
   registrationSchema,
   heartbeatSchema,
@@ -11,7 +10,6 @@ import {
 export interface Worker {
   spec: Registration;
   lease_id: string;
-  token: string;
   expires: number;
   heartbeat_at: number;
   sequence: number;
@@ -47,7 +45,6 @@ export class WorkerRegistry {
     const worker: Worker = {
       spec,
       lease_id: randomUUID(),
-      token: randomBytes(32).toString('base64url'),
       expires: Date.now() + this.ttl,
       heartbeat_at: Date.now(),
       sequence: -1,
@@ -58,19 +55,18 @@ export class WorkerRegistry {
     this.workers.set(spec.worker_id, worker);
     return worker;
   }
-  authenticate(id: string, header: string | undefined, lease: string): Worker {
+  currentLease(id: string, lease: string): Worker {
     const w = this.workers.get(id);
-    if (!w) throw new ApiError(401, 'unknown_worker', 'worker must register');
-    requireToken(header, w.token);
+    if (!w) throw new ApiError(409, 'unknown_worker', 'worker must register');
     if (lease !== w.lease_id || w.expires <= Date.now())
       throw new ApiError(409, 'expired_lease', 'worker must register a new lease');
     return w;
   }
-  heartbeat(id: string, header: string | undefined, value: unknown): Worker {
+  heartbeat(id: string, value: unknown): Worker {
     const parsed = heartbeatSchema.safeParse(value);
     if (!parsed.success) throw new ApiError(400, 'invalid_heartbeat', parsed.error.message);
     const v = parsed.data,
-      w = this.authenticate(id, header, v.lease_id);
+      w = this.currentLease(id, v.lease_id);
     if (v.sequence <= w.sequence)
       throw new ApiError(409, 'stale_sequence', 'heartbeat sequence must increase');
     w.sequence = v.sequence;

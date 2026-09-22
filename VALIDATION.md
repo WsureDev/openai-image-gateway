@@ -1,36 +1,18 @@
-# Validation — 2026-09-22
+# 验证
 
-Runtime: Node.js 24.18.0. Dependencies installed independently from package-lock.json using npm ci. No symlinks to another repository's dependencies.
+运行环境为 Node.js 24，依赖由 package-lock.json 和 npm ci 固定。
 
-Passed:
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run format:check
+node scripts/adapter-contract-smoke.mjs /path/to/openai-image-worker-adapter
+node scripts/verify-deployment.mjs
+```
 
-- TypeScript typecheck, build, Prettier check.
-- 15 Gateway integration tests with temporary loopback HTTP workers.
-- OpenAI SDK model listing and image generation against Gateway.
-- Official MCP SDK initialization, tool enumeration, and worker query.
-- Three-worker capacity isolation, model-based routing, multipart binary preservation.
-- Concurrent/persistent idempotency; mismatched request rejection.
-- Lease expiry, old-token fencing, task-event replay deduplication.
-- Ambiguous dispatch reconciliation without duplicate inference; Gateway restart recovery.
-- Queue timeout, real-time SSE, late duplicate SSE replay, Gateway-owned image URLs, body limits.
-- Cross-repository smoke: three real Adapter runtimes with injected fake backends; six jobs distributed across all three; successful events persisted.
-- Adapter test suite: 4 tests, using only fake backends/Gateway and fixture GPU CSV.
-- Protocol source, Markdown contract and JSON Schema are byte-identical in both repositories.
+自动化测试使用临时 HTTP worker 和 SQLite，覆盖三执行单元并发、模型路由、multipart、幂等持久化、队列超时、租约、事件去重、断线恢复、SSE 和图片 URL。OpenAI SDK 和官方 MCP SDK 参与接口验证。
 
-Not performed:
+契约冒烟测试启动三个真实 Adapter 运行时并注入 fake backend，确认自主注册、任务分配和事件持久化。部署验证检查 HTTP 健康、内部免鉴权、对外凭据隔离、模型目录、指标及八个只读 MCP 工具。
 
-- No live Qwen/Hunyuan image inference, API requests to existing model services, or GPU telemetry commands.
-- No modifications to the existing qwen-image API, production model/container workloads, or client configuration.
-- Adapter containers have not been built or started.
-
-Deployment acceptance completed on 2026-09-22:
-
-- Built the Gateway image from a digest-pinned Node 24 Alpine base with npm ci.
-- Started only `openai-image-gateway` using the standard root compose.yaml.
-- Docker healthcheck passed; non-root user, read-only root filesystem, dedicated data volume and restart policy verified through Docker inspection.
-- Default Docker address pools were exhausted; the Gateway received an isolated, non-overlapping 10.253.80.0/24 Compose subnet. Existing networks were unchanged.
-- Read-only verification against the deployed Gateway passed: liveness, generation authentication, management scope, models, status, metrics, and official MCP SDK initialization/list/call for all eight exposed tools.
-- Zero registered workers and an empty model list were confirmed. /readyz returned the expected 503 while /livez returned 200.
-- The three independent credentials are stored only in ignored, mode-0600 .env; no credentials were printed or committed.
-
-Next phase after worker optimization completes: inspect the optimized worker's finalized API and capability limits, align the Qwen connector, then validate single-request generation/editing and finally three-GPU concurrency. The current connector follows the previously inspected legacy /health + /generate shape only. Uncertain model execution is intentionally not auto-retried.
+生产服务由 Compose 管理。模型 worker 的容器 ID、启动时间与镜像用于确认 API 更新没有改动推理进程。包内不包含真实凭据、任务数据库或模型权重。

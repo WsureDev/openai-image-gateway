@@ -20,6 +20,39 @@ assert.equal(live.status, 200);
 assert.deepEqual(await live.json(), { status: 'ok' });
 const unauthorized = await request('/v1/models');
 assert.equal(unauthorized.status, 401);
+assert.equal((await request('/gateway/v1/status')).status, 401);
+// Invalid payloads exercise the public internal routes without changing registry state.
+for (const [path, method, payload, expected] of [
+  ['/control/v1/workers/register', 'POST', {}, 400],
+  [
+    '/control/v1/workers/__auth_probe__/heartbeat',
+    'PUT',
+    {
+      lease_id: '00000000-0000-4000-8000-000000000000',
+      sequence: 1,
+      state: 'ready',
+      load: { in_flight: 0, queue_depth: 0 },
+    },
+    409,
+  ],
+  [
+    '/control/v1/workers/__auth_probe__/events',
+    'POST',
+    {
+      lease_id: '00000000-0000-4000-8000-000000000000',
+      events: [],
+    },
+    409,
+  ],
+]) {
+  const response = await fetch(new URL(path, base), {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5000),
+  });
+  assert.equal(response.status, expected);
+}
 const models = await request('/v1/models', config.GATEWAY_GENERATION_TOKEN);
 assert.equal(models.status, 200);
 const inventory = await models.json();
@@ -71,6 +104,7 @@ try {
           'liveness',
           'generation_auth',
           'management_scope',
+          'internal_routes_without_auth',
           'models',
           'status',
           'metrics',

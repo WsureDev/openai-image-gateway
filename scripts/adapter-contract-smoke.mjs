@@ -26,7 +26,7 @@ const config = {
   public_url: 'http://127.0.0.1:1',
   generation_token: token,
   management_token: token,
-  enrollment_token: token,
+
   heartbeat_ttl_ms: 1000,
   worker_request_timeout_ms: 2000,
   max_request_bytes: 1048576,
@@ -50,8 +50,7 @@ try {
       public_url: 'http://127.0.0.1:1',
       worker_id: `smoke-${i}`,
       gateway_url: config.public_url,
-      enrollment_token: token,
-      api_token: token,
+
       state_path: join(root, `adapter-${i}.sqlite`),
       max_request_bytes: 1048576,
       max_response_bytes: 1048576,

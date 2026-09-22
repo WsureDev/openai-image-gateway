@@ -46,7 +46,6 @@ async function handle(req: IncomingMessage, res: ServerResponse, g: GatewayServi
   }
   if (path.startsWith('/control/')) {
     if (method === 'POST' && path === '/control/v1/workers/register') {
-      requireToken(req.headers.authorization, g.config.enrollment_token);
       json(res, 201, g.register(await readJson(req)));
       return;
     }
@@ -57,8 +56,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, g: GatewayServi
         res,
         match[2] === 'events' ? 202 : 200,
         match[2] === 'heartbeat'
-          ? g.heartbeat(decodeURIComponent(match[1]), req.headers.authorization, body)
-          : g.events(decodeURIComponent(match[1]), req.headers.authorization, body),
+          ? g.heartbeat(decodeURIComponent(match[1]), body)
+          : g.events(decodeURIComponent(match[1]), body),
       );
       return;
     }

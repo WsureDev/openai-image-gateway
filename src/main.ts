@@ -20,7 +20,6 @@ const config: GatewayConfig = {
   state_path: process.env.GATEWAY_STATE_PATH ?? './data/gateway.sqlite',
   public_url: origin(process.env.GATEWAY_PUBLIC_URL ?? `http://127.0.0.1:${port}`),
   generation_token: secret('GATEWAY_GENERATION_TOKEN'),
-  enrollment_token: secret('GATEWAY_ENROLLMENT_TOKEN'),
   management_token: secret('GATEWAY_MANAGEMENT_TOKEN'),
   default_model: process.env.GATEWAY_DEFAULT_MODEL,
   heartbeat_ttl_ms: number('GATEWAY_HEARTBEAT_TTL_MS', 30000),

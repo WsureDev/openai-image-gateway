@@ -19,9 +19,7 @@ import {
   type Task,
 } from '../src/protocol.js';
 const generation = 'generation-secret-at-least-24',
-  enrollment = 'enrollment-secret-at-least-24',
-  management = 'management-secret-at-least-24',
-  apiToken = 'worker-api-secret-at-least-24';
+  management = 'management-secret-at-least-24';
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(check: () => boolean, ms = 3000) {
   const end = Date.now() + ms;
@@ -46,7 +44,6 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
     state_path: join(root, 'state.sqlite'),
     public_url: 'http://127.0.0.1:1',
     generation_token: generation,
-    enrollment_token: enrollment,
     management_token: management,
     heartbeat_ttl_ms: 3000,
     worker_request_timeout_ms: 2000,
@@ -73,10 +70,18 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
     store.close();
     await rm(root, { recursive: true, force: true });
   });
-  const call = (path: string, body?: unknown, token = generation, method = body ? 'POST' : 'GET') =>
+  const call = (
+    path: string,
+    body?: unknown,
+    token: string | undefined = undefined,
+    method = body ? 'POST' : 'GET',
+  ) =>
     fetch(url + path, {
       method,
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        'content-type': 'application/json',
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
   async function worker(
@@ -104,7 +109,7 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
       }),
     };
     const ws = createServer(async (req, res) => {
-      assert.equal(req.headers.authorization, `Bearer ${apiToken}`);
+      assert.equal(req.headers.authorization, undefined);
       if (req.url?.startsWith('/worker/v1/tasks/')) {
         const value = results.get(req.url.split('/').at(-1)!);
         res.writeHead(value ? 200 : 404, { 'content-type': 'application/json' });
@@ -147,7 +152,7 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
       protocol_version: PROTOCOL,
       worker_id: id,
       instance_id: opts.instance ?? 'instance-one',
-      endpoint: { base_url: endpoint, protocol: 'openai-image/v1', api_token: apiToken },
+      endpoint: { base_url: endpoint, protocol: 'openai-image/v1' },
       models: [
         {
           id: opts.model ?? 'alpha-image',
@@ -159,9 +164,10 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
       capacity: { slots: 1, max_queue: 0 },
       resources: { node_id: id, gpu_ids: ['gpu-1'] },
     };
-    const registered = await call('/control/v1/workers/register', spec, enrollment);
+    const registered = await call('/control/v1/workers/register', spec);
     assert.equal(registered.status, 201);
-    const lease = (await registered.json()) as { lease_id: string; worker_token: string };
+    const lease = (await registered.json()) as { lease_id: string };
+    assert.ok(!Object.hasOwn(lease, 'worker_token'));
     let sequence = 0;
     const beat = (leaseId = lease.lease_id) =>
       call(
@@ -172,7 +178,7 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
           state: 'ready',
           load: { in_flight: 0, queue_depth: 0 },
         },
-        lease.worker_token,
+        undefined,
         'PUT',
       );
     assert.equal((await beat()).status, 200);
@@ -325,7 +331,8 @@ test('MCP SDK initializes and calls read-only tools; credentials and prompts are
   const result = await client.callTool({ name: 'workers_list', arguments: {} });
   const text = JSON.stringify(result);
   assert.ok(text.includes('alpha'));
-  assert.ok(!text.includes(apiToken));
+  assert.ok(!text.includes('worker_token'));
+  assert.ok(!text.includes('api_token'));
   assert.equal(
     (await f.call('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, generation)).status,
     401,
@@ -378,12 +385,12 @@ test('running jobs become uncertain on restart and reconcile against the same wo
   w.results.set(task.id, { state: 'succeeded', result: w.output });
   await f.restart();
   assert.equal(f.g.jobs()[0].state, 'uncertain');
-  const r = await f.call('/control/v1/workers/register', w.spec, enrollment);
-  const e = (await r.json()) as { lease_id: string; worker_token: string };
+  const r = await f.call('/control/v1/workers/register', w.spec);
+  const e = (await r.json()) as { lease_id: string };
   await f.call(
     '/control/v1/workers/alpha/heartbeat',
     { lease_id: e.lease_id, sequence: 1, state: 'ready', load: { in_flight: 0, queue_depth: 0 } },
-    e.worker_token,
+    undefined,
     'PUT',
   );
   await until(() => f.g.jobs()[0].state === 'succeeded');
@@ -428,24 +435,32 @@ test('response_format=url serves a Gateway-owned image independent of worker add
   assert.equal(await image.text(), 'fake-png');
   assert.equal(JSON.stringify(result).includes('b64_json'), false);
 });
-test('malformed registration, control auth and events ownership are enforced', async (t) => {
+test('registration is public while payload validation, ownership and external auth remain enforced', async (t) => {
   const f = await fixture(t),
     w = await f.worker('alpha');
-  assert.equal((await f.call('/control/v1/workers/register', {}, enrollment)).status, 400);
-  assert.equal((await f.call('/control/v1/workers/register', w.spec, generation)).status, 401);
+  assert.equal((await f.call('/control/v1/workers/register', {})).status, 400);
+  assert.equal(
+    (
+      await f.call('/control/v1/workers/register', {
+        ...w.spec,
+        protocol_version: 'unknown-protocol',
+      })
+    ).status,
+    400,
+  );
   const response = await f.call(
     '/control/v1/workers/alpha/events',
     {
       lease_id: w.lease.lease_id,
       events: [{ sequence: 1, task_id: 'not-owned', state: 'running', occurred_at: Date.now() }],
     },
-    w.lease.worker_token,
+    undefined,
   );
   assert.equal(response.status, 409);
   assert.equal((await f.call('/gateway/v1/jobs', undefined, generation)).status, 401);
 });
 
-test('events replay is idempotent and worker re-registration fences the old control token', async (t) => {
+test('events replay is idempotent and worker re-registration fences the old lease', async (t) => {
   const f = await fixture(t),
     w = await f.worker('alpha');
   const r = await submit(f);
@@ -455,20 +470,20 @@ test('events replay is idempotent and worker re-registration fences the old cont
     events: [{ sequence: 1, task_id: id, state: 'succeeded', occurred_at: Date.now() }],
   };
   assert.deepEqual(
-    await (await f.call('/control/v1/workers/alpha/events', body, w.lease.worker_token)).json(),
+    await (await f.call('/control/v1/workers/alpha/events', body, undefined)).json(),
     { accepted: 1 },
   );
   assert.deepEqual(
-    await (await f.call('/control/v1/workers/alpha/events', body, w.lease.worker_token)).json(),
+    await (await f.call('/control/v1/workers/alpha/events', body, undefined)).json(),
     { accepted: 0 },
   );
   const replacement = await f.call(
     '/control/v1/workers/register',
     { ...w.spec, instance_id: 'replacement-instance' },
-    enrollment,
+    undefined,
   );
   assert.equal(replacement.status, 201);
-  assert.equal((await w.beat()).status, 401);
+  assert.equal((await w.beat()).status, 409);
 });
 test('a late duplicate stream gets the complete replay rather than a missing first event', async (t) => {
   const f = await fixture(t),

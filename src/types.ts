@@ -4,7 +4,6 @@ export interface GatewayConfig {
   state_path: string;
   public_url: string;
   generation_token: string;
-  enrollment_token: string;
   management_token: string;
   default_model?: string;
   heartbeat_ttl_ms: number;

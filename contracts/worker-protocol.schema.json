@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "OpenAI Image Worker Protocol v1",
-  "description": "Project-owned auxiliary worker protocol; not an official OpenAI control protocol.",
+  "title": "OpenAI Image Worker Protocol",
+  "description": "Unauthenticated trusted-LAN worker protocol. Gateway client authentication remains separate.",
   "oneOf": [
     {
       "$ref": "#/$defs/registration"
@@ -37,14 +37,9 @@
             },
             "protocol": {
               "const": "openai-image/v1"
-            },
-            "api_token": {
-              "type": "string",
-              "minLength": 24,
-              "maxLength": 512
             }
           },
-          "required": ["base_url", "protocol", "api_token"]
+          "required": ["base_url", "protocol"]
         },
         "models": {
           "type": "array",

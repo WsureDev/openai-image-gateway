@@ -22,7 +22,6 @@ export const registrationSchema = z.object({
   endpoint: z.object({
     base_url: z.string().url(),
     protocol: z.literal('openai-image/v1'),
-    api_token: z.string().min(24).max(512),
   }),
   models: z.array(modelSchema).min(1).max(100),
   capacity: z.object({ slots: z.number().int().min(1).max(64), max_queue: z.literal(0) }),
@@ -59,7 +58,6 @@ export type TaskEvent = z.infer<typeof eventSchema>;
 export interface Enrollment {
   worker_id: string;
   lease_id: string;
-  worker_token: string;
   heartbeat_interval_ms: number;
   lease_ttl_ms: number;
 }

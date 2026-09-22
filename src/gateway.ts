@@ -63,21 +63,20 @@ export class GatewayService {
     return {
       worker_id: w.spec.worker_id,
       lease_id: w.lease_id,
-      worker_token: w.token,
       heartbeat_interval_ms: Math.max(10, Math.floor(this.config.heartbeat_ttl_ms / 3)),
       lease_ttl_ms: this.config.heartbeat_ttl_ms,
     };
   }
-  heartbeat(id: string, header: string | undefined, body: unknown): unknown {
-    const w = this.registry.heartbeat(id, header, body);
+  heartbeat(id: string, body: unknown): unknown {
+    const w = this.registry.heartbeat(id, body);
     this.store.worker(id, this.registry.snapshot(w, this.reserved(id)));
     this.pump();
     return { accepted_sequence: w.sequence, lease_expires_at: w.expires };
   }
-  events(id: string, header: string | undefined, body: unknown): unknown {
+  events(id: string, body: unknown): unknown {
     const v = eventsSchema.safeParse(body);
     if (!v.success) throw new ApiError(400, 'invalid_events', v.error.message);
-    const w = this.registry.authenticate(id, header, v.data.lease_id);
+    const w = this.registry.currentLease(id, v.data.lease_id);
     let accepted = 0;
     for (const event of v.data.events) {
       const task = this.store.task(event.task_id);
@@ -350,7 +349,6 @@ export class GatewayService {
             redirect: 'error',
             headers: {
               ...encoded.headers,
-              authorization: `Bearer ${w.spec.endpoint.api_token}`,
               'x-gateway-job-id': job.id,
               'idempotency-key': job.id,
             },
@@ -510,7 +508,6 @@ export class GatewayService {
           const response = await fetch(
             `${w.spec.endpoint.base_url}/worker/v1/tasks/${encodeURIComponent(job.id)}`,
             {
-              headers: { authorization: `Bearer ${w.spec.endpoint.api_token}` },
               signal: AbortSignal.timeout(2000),
               redirect: 'error',
             },

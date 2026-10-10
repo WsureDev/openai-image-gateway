@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { GatewayService } from './gateway.js';
+import { ApiError } from './protocol.js';
 export async function handleMcp(
   req: IncomingMessage,
   res: ServerResponse,
@@ -15,6 +16,44 @@ export async function handleMcp(
     structuredContent: { data: value },
   });
   const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
+  const writeAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+  server.registerTool(
+    'adapter_configs_list',
+    {
+      description: 'Current runtime configuration profiles learned from registered adapters.',
+      inputSchema: {},
+      annotations,
+    },
+    async () => wrap(gateway.adapterConfigs()),
+  );
+  server.registerTool(
+    'adapter_config_get',
+    {
+      description: 'Inspect one current adapter configuration profile.',
+      inputSchema: { adapter_type: z.string(), image_id: z.string() },
+      annotations,
+    },
+    async ({ adapter_type, image_id }) =>
+      wrap(gateway.adapterConfig(adapter_type, image_id) ?? null),
+  );
+  server.registerTool(
+    'adapter_config_set',
+    {
+      description: 'Replace the current runtime configuration for one adapter and image.',
+      inputSchema: {
+        adapter_type: z.string(),
+        image_id: z.string(),
+        config: z.record(z.unknown()),
+      },
+      annotations: writeAnnotations,
+    },
+    async ({ adapter_type, image_id, config }) => {
+      if (!gateway.adapterConfig(adapter_type, image_id))
+        throw new ApiError(404, 'adapter_config_not_found', 'adapter config not found');
+      gateway.setAdapterConfig(adapter_type, image_id, config);
+      return wrap(gateway.adapterConfig(adapter_type, image_id));
+    },
+  );
   server.registerTool(
     'workers_list',
     {

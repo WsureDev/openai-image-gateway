@@ -19,11 +19,19 @@ export interface Decision {
   job_id: string;
   selected_worker_id: string;
   created_at: number;
+  policy?: string;
+  selection_reason?: string;
   candidates: Array<{
     worker_id: string;
     eligible: boolean;
     reason?: string;
     estimated_ms?: number;
+    estimate_source?: string;
+    sample_count?: number;
+    in_flight?: number;
+    slots?: number;
+    last_dispatch?: number;
+    dispatches_since_last?: number;
   }>;
 }
 export type { Task, ImageInput, ImageOutput, Registration, Heartbeat, Model } from './protocol.js';

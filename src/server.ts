@@ -44,6 +44,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, g: GatewayServi
     res.end(file.content);
     return;
   }
+  if (method === 'GET' && path === '/control/v1/config') {
+    const adapterType = url.searchParams.get('adapter_type') ?? '';
+    const imageId = url.searchParams.get('image_id') ?? '';
+    const config = adapterType && imageId ? g.adapterConfig(adapterType, imageId) : undefined;
+    if (!config) throw new ApiError(404, 'adapter_config_not_found', 'adapter config not found');
+    const { schema: _schema, ...runtime } = config;
+    json(res, 200, runtime);
+    return;
+  }
   if (path.startsWith('/control/')) {
     if (method === 'POST' && path === '/control/v1/workers/register') {
       json(res, 201, g.register(await readJson(req)));

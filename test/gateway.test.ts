@@ -92,6 +92,7 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
       stream?: boolean;
       disconnect?: boolean;
       instance?: string;
+      metadata?: Record<string, unknown>;
     } = {},
   ) {
     let calls = 0,
@@ -159,6 +160,7 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
           operations: ['images.generations', 'images.edits'],
           streaming: opts.stream ?? false,
           estimated_duration_ms: 100,
+          ...(opts.metadata ? { metadata: opts.metadata } : {}),
         },
       ],
       capacity: { slots: 1, max_queue: 0 },
@@ -229,6 +231,31 @@ async function fixture(t: TestContext, options: Partial<GatewayConfig> = {}) {
   };
 }
 const request = { model: 'alpha-image', prompt: 'test', steps: 17 };
+test('actual dispatch explores idle workers then prefers observed speed, spilling to idle capacity', async (t) => {
+  const f = await fixture(t);
+  const slow = await f.worker('a-slow', { delay: 80 });
+  const fastOptions = { delay: 5 };
+  const fast = await f.worker('z-fast', fastOptions);
+  for (let i = 0; i < 3; i++) {
+    const response = await submit(f);
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+  }
+  assert.equal(slow.calls, 1);
+  assert.equal(fast.calls, 2);
+  const decisions = f.store.decisions();
+  assert.equal(decisions[0].selection_reason, 'fastest_history');
+  assert.equal(decisions[0].selected_worker_id, 'z-fast');
+  assert.ok(decisions[0].candidates.every((c) => c.sample_count! > 0));
+  const callsBefore = slow.calls;
+  fastOptions.delay = 80;
+  const both = await Promise.all([submit(f), submit(f)]);
+  for (const response of both) {
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+  }
+  assert.equal(slow.calls, callsBefore + 1);
+});
 function submit(
   f: Awaited<ReturnType<typeof fixture>>,
   body: Record<string, unknown> = request,
@@ -315,9 +342,15 @@ test('idempotency survives simultaneous requests and Gateway restart; conflicts 
   assert.equal(await retry.text(), first);
   assert.equal(a.calls, 1);
 });
-test('MCP SDK initializes and calls read-only tools; credentials and prompts are excluded', async (t) => {
+test('MCP SDK initializes, exposes config tools, and keeps credentials and prompts excluded', async (t) => {
   const f = await fixture(t);
-  await f.worker('alpha');
+  await f.worker('alpha', {
+    metadata: {
+      adapter_type: 'qwen',
+      config_schema: { type: 'object', properties: { steps: { type: 'integer' } } },
+      config_defaults: { steps: 28, steps_mode: 'default' },
+    },
+  });
   await submit(f);
   const client = new Client({ name: 'test', version: '1' });
   const transport = new StreamableHTTPClientTransport(new URL(f.url + '/mcp'), {
@@ -326,8 +359,62 @@ test('MCP SDK initializes and calls read-only tools; credentials and prompts are
   t.after(() => client.close());
   await client.connect(transport);
   const list = await client.listTools();
-  assert.equal(list.tools.length, 8);
-  assert.ok(list.tools.every((tool) => tool.annotations?.readOnlyHint));
+  assert.equal(list.tools.length, 11);
+  assert.ok(
+    list.tools
+      .filter((tool) => !tool.name.startsWith('adapter_config_'))
+      .every((tool) => tool.annotations?.readOnlyHint),
+  );
+  assert.ok(
+    list.tools.find((tool) => tool.name === 'adapter_config_set')?.annotations?.readOnlyHint ===
+      false,
+  );
+  const configs = await client.callTool({ name: 'adapter_configs_list', arguments: {} });
+  assert.ok(JSON.stringify(configs).includes('alpha-image'));
+  const set = await client.callTool({
+    name: 'adapter_config_set',
+    arguments: {
+      adapter_type: 'qwen',
+      image_id: 'alpha-image',
+      config: { steps: 40, steps_mode: 'default' },
+    },
+  });
+  assert.ok(!set.isError);
+  assert.ok(JSON.stringify(set).includes('40'));
+  const applied = await f.call('/control/v1/config?adapter_type=qwen&image_id=alpha-image');
+  assert.equal(applied.status, 200);
+  assert.deepEqual(await applied.json(), {
+    adapter_type: 'qwen',
+    image_id: 'alpha-image',
+    config: { steps: 40, steps_mode: 'default' },
+  });
+  const missing = await client.callTool({
+    name: 'adapter_config_set',
+    arguments: { adapter_type: 'unregistered', image_id: 'unregistered', config: {} },
+  });
+  assert.equal(missing.isError, true);
+  assert.equal(
+    (
+      await f.call(
+        '/mcp',
+        {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: {
+            name: 'adapter_config_set',
+            arguments: { adapter_type: 'qwen', image_id: 'alpha-image', config: {} },
+          },
+        },
+        generation,
+      )
+    ).status,
+    401,
+  );
+  assert.deepEqual(f.g.adapterConfig('qwen', 'alpha-image')?.config, {
+    steps: 40,
+    steps_mode: 'default',
+  });
   const result = await client.callTool({ name: 'workers_list', arguments: {} });
   const text = JSON.stringify(result);
   assert.ok(text.includes('alpha'));

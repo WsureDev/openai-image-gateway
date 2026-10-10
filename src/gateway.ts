@@ -7,6 +7,7 @@ import {
   encodeImage,
   boundedResponse,
   eventsSchema,
+  registrationSchema,
   type ImageInput,
   type ImageOutput,
   type Task,
@@ -14,6 +15,13 @@ import {
 import { StateStore } from './store.js';
 import { WorkerRegistry, type Worker } from './worker-registry.js';
 import type { GatewayConfig, Decision } from './types.js';
+import {
+  selectCandidate,
+  PROBE_INTERVAL,
+  HISTORY_SAMPLES,
+  HISTORY_ALPHA,
+  type RankedCandidate,
+} from './scheduler.js';
 
 export class GatewayService {
   readonly registry: WorkerRegistry;
@@ -58,14 +66,80 @@ export class GatewayService {
       ).length;
   }
   register(value: unknown): unknown {
-    const w = this.registry.register(value);
-    this.store.worker(w.spec.worker_id, this.registry.snapshot(w, this.reserved(w.spec.worker_id)));
+    const parsed = registrationSchema.safeParse(value);
+    if (!parsed.success) throw new ApiError(400, 'invalid_registration', parsed.error.message);
+    // Check only the generic registration envelope. Model-specific rules remain
+    // in the implementation which supplies the schema and consumes the config.
+    const profiles: Array<{ type: string; image: string; schema: unknown; defaults: unknown }> = [];
+    for (const model of parsed.data.models) {
+      const metadata = model.metadata;
+      if (
+        !metadata ||
+        !['adapter_type', 'config_schema', 'config_defaults'].some((key) => key in metadata)
+      )
+        continue;
+      if (
+        typeof metadata.adapter_type !== 'string' ||
+        !/^[A-Za-z0-9._:-]{1,128}$/.test(metadata.adapter_type) ||
+        !metadata.config_schema ||
+        typeof metadata.config_schema !== 'object' ||
+        Array.isArray(metadata.config_schema) ||
+        !metadata.config_defaults ||
+        typeof metadata.config_defaults !== 'object' ||
+        Array.isArray(metadata.config_defaults)
+      )
+        throw new ApiError(
+          400,
+          'invalid_config_registration',
+          'configuration metadata requires adapter_type, schema object and defaults object',
+        );
+      profiles.push({
+        type: metadata.adapter_type,
+        image: model.id,
+        schema: metadata.config_schema,
+        defaults: metadata.config_defaults,
+      });
+    }
+    const previous = this.registry.workers.get(parsed.data.worker_id);
+    const w = this.registry.register(parsed.data);
+    try {
+      this.store.db.exec('BEGIN IMMEDIATE');
+      this.store.worker(
+        w.spec.worker_id,
+        this.registry.snapshot(w, this.reserved(w.spec.worker_id)),
+      );
+      for (const p of profiles)
+        this.store.ensureAdapterConfig(p.type, p.image, p.schema, p.defaults);
+      this.store.db.exec('COMMIT');
+    } catch (error) {
+      if (this.store.db.isTransaction) this.store.db.exec('ROLLBACK');
+      if (previous) this.registry.workers.set(previous.spec.worker_id, previous);
+      else this.registry.workers.delete(w.spec.worker_id);
+      throw error;
+    }
     return {
       worker_id: w.spec.worker_id,
       lease_id: w.lease_id,
       heartbeat_interval_ms: Math.max(10, Math.floor(this.config.heartbeat_ttl_ms / 3)),
       lease_ttl_ms: this.config.heartbeat_ttl_ms,
     };
+  }
+  adapterConfig(adapterType: string, imageId: string) {
+    return this.store.adapterConfig(adapterType, imageId);
+  }
+  adapterConfigs() {
+    return this.store.adapterConfigs();
+  }
+  setAdapterConfig(adapterType: string, imageId: string, config: unknown): void {
+    if (!config || typeof config !== 'object' || Array.isArray(config))
+      throw new ApiError(400, 'invalid_adapter_config', 'configuration must be a JSON object');
+    if (!this.store.adapterConfig(adapterType, imageId))
+      throw new ApiError(
+        404,
+        'adapter_config_not_found',
+        'register an adapter before configuring it',
+      );
+    this.store.setAdapterConfig(adapterType, imageId, config);
   }
   heartbeat(id: string, body: unknown): unknown {
     const w = this.registry.heartbeat(id, body);
@@ -113,6 +187,12 @@ export class GatewayService {
     return {
       workers: this.workerSnapshots(),
       models: this.models(),
+      scheduler: {
+        policy: 'idle_then_adaptive_speed',
+        history_samples: HISTORY_SAMPLES,
+        ewma_alpha: HISTORY_ALPHA,
+        probe_after_dispatches: PROBE_INTERVAL,
+      },
       queue: {
         pending: tasks.filter((t) => t.state === 'queued').length,
         running: tasks.filter((t) => ['running', 'dispatching'].includes(t.state)).length,
@@ -237,19 +317,8 @@ export class GatewayService {
       this.bus.on('stop', stop);
     });
   }
-  private profile(worker: string, job: Task, input: ImageInput): string {
-    return JSON.stringify([
-      worker,
-      job.model,
-      job.operation,
-      input.fields.size ?? 'auto',
-      input.fields.n ?? 1,
-    ]);
-  }
   private choose(job: Task, input: ImageInput): { worker?: Worker; decision: Decision } {
-    let chosen: Worker | undefined,
-      best = Infinity;
-    const candidates: Decision['candidates'] = [];
+    const candidates: RankedCandidate[] = [];
     for (const w of this.registry.workers.values()) {
       const m = w.spec.models.find((m) => m.id === job.model);
       let reason: string | undefined;
@@ -260,30 +329,35 @@ export class GatewayService {
         reason = 'worker_not_ready';
       else if (Math.max(w.reported, this.reserved(w.spec.worker_id)) >= w.spec.capacity.slots)
         reason = 'capacity_full';
-      const duration =
-        this.store.duration(this.profile(w.spec.worker_id, job, input)) ??
-        (m?.estimated_duration_ms ?? 60_000) * Number(input.fields.n ?? 1);
+      const inFlight = Math.max(w.reported, this.reserved(w.spec.worker_id));
       candidates.push({
         worker_id: w.spec.worker_id,
         eligible: !reason,
         reason,
-        estimated_ms: duration,
+        in_flight: inFlight,
+        slots: w.spec.capacity.slots,
+        ...this.store.estimate(
+          w.spec.worker_id,
+          w.spec.instance_id,
+          job.model,
+          job.operation,
+          input,
+          (m?.estimated_duration_ms ?? 60_000) * Number(input.fields.n ?? 1),
+        ),
       });
-      if (
-        !reason &&
-        (duration < best ||
-          (duration === best && w.spec.worker_id < (chosen?.spec.worker_id ?? '')))
-      ) {
-        chosen = w;
-        best = duration;
-      }
     }
+    const selection = selectCandidate(candidates);
+    const chosen = selection.selected
+      ? this.registry.workers.get(selection.selected.worker_id)
+      : undefined;
     return {
       worker: chosen,
       decision: {
         job_id: job.id,
         selected_worker_id: chosen?.spec.worker_id ?? '',
         created_at: Date.now(),
+        policy: 'idle_then_adaptive_speed',
+        selection_reason: selection.reason,
         candidates,
       },
     };
@@ -310,6 +384,7 @@ export class GatewayService {
         (c) => c.worker_id === job.worker_id,
       )?.estimated_ms;
       this.store.save(job);
+      this.store.dispatched(job, input);
       this.store.decision(decision);
       const controller = new AbortController();
       this.active.set(job.id, controller);
@@ -461,6 +536,7 @@ export class GatewayService {
     return { ...output, body: JSON.stringify(result) };
   }
   private complete(job: Task, output: ImageOutput): void {
+    const directCompletion = job.state === 'running';
     const ok = output.status >= 200 && output.status < 300;
     job.state = ok ? 'succeeded' : 'failed';
     job.completed_at = Date.now();
@@ -471,11 +547,8 @@ export class GatewayService {
       delete job.error_message;
     }
     this.store.save(job, output);
-    if (ok && job.started_at)
-      this.store.sample(
-        this.profile(job.worker_id, job, this.store.input(job.id)),
-        Date.now() - job.started_at,
-      );
+    if (ok && directCompletion && job.started_at)
+      this.store.recordDuration(job, job.completed_at - job.started_at);
     this.bus.emit(`done:${job.id}`, output);
     this.liveStreams.delete(job.id);
   }

@@ -16,6 +16,16 @@ Gateway 与 Adapter 使用唯一的 `openai-image-worker/v1` 契约。两个仓�
 
 Adapter 返回 `{created,data:[{b64_json,...}],...}`。Gateway 在 response_format=url 时托管图片，生成有效期一小时的随机能力 URL。stream=true 只路由到声明 streaming=true 的模型，使用 `image_generation.completed` / `image_edit.completed` 及可选 partial_image 事件。流式结果使用 base64。
 
+## Adapter 运行时配置
+
+具体实现通过注册模型的 `metadata` 提交 `adapter_type`、`config_schema`（JSON Schema 对象）、`config_defaults`（JSON 对象）。Gateway 不预设模型 schema，首次注册按 `adapter_type + image_id` 保存 schema 和唯一当前配置；`image_id` 对应模型 `id`。后续注册和重启不覆盖已有配置。
+
+管理 MCP 提供 `adapter_configs_list`、`adapter_config_get` 和 `adapter_config_set`。set 的参数为 `{adapter_type,image_id,config}`，只替换已注册项的当前配置，不合并旧字段；无配置版本、digest 或历史。Gateway 只检查配置对象的基本结构，具体字段校验由模型实现负责。
+
+Adapter 在每次新的 Gateway 生图任务开始推理前调用 `GET /control/v1/config?adapter_type=...&image_id=...`，返回 `{adapter_type,image_id,config}`，采用 `Cache-Control: no-store`。拉取失败、响应标识不匹配或模型实现校验失败时，任务明确失败并释放槽位，不推理、不静默回退，不自动重试推理。
+
+配置仅作为本次调用的内存参数；内置默认值、环境变量和 Worker 都不改变。不做定时同步；生图请求不增加配置字段或 header。一次 API 请求（包括 `n > 1`）只读取一次，后续配置修改不影响已开始的请求。幂等请求只重放已保存结果，不重新读取配置。直接请求 Adapter 使用本地默认值，即使 Adapter 已注册 Gateway。
+
 Gateway 派发时发送 `X-Gateway-Job-Id`，并以同一全局任务 ID 作为 `Idempotency-Key`。Adapter 持久化任务去重和结果；相同 ID 携带不同请求返回 409。n 张图片由一个执行单元顺序完成，多个独立请求可以使用多个 GPU。
 
 ## 主动注册

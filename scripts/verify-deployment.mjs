@@ -75,7 +75,7 @@ try {
     }),
   );
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 11);
   const toolArguments = {
     workers_list: {},
     workers_get: { worker_id: '__deployment_unregistered__' },
@@ -85,8 +85,14 @@ try {
     scheduler_snapshot: {},
     scheduler_explain: { job_id: '__deployment_unregistered__' },
     metrics_snapshot: {},
+    adapter_configs_list: {},
+    adapter_config_get: {
+      adapter_type: '__deployment_unknown__',
+      image_id: '__deployment_unknown__',
+    },
   };
   for (const tool of tools) {
+    if (tool.name === 'adapter_config_set') continue;
     assert.ok(Object.hasOwn(toolArguments, tool.name));
     const result = await client.callTool({ name: tool.name, arguments: toolArguments[tool.name] });
     assert.ok(!result.isError, `${tool.name} must succeed`);

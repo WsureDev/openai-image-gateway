@@ -2,7 +2,7 @@ name: openai-image-gateway
 
 services:
   gateway:
-    image: openai-image-gateway:0.1.0
+    image: openai-image-gateway:mcp-config-scheduler-20260927
     build:
       context: .
       network: ${GATEWAY_BUILD_NETWORK:-default}

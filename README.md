@@ -6,6 +6,8 @@
 
 ## 安装与测试
 
+本机开发和 CI 使用 `.nvmrc` 指定的 Node.js 26；使用 nvm 时，先执行 `nvm install` 和 `nvm use`。
+
 ```bash
 npm ci
 npm run typecheck

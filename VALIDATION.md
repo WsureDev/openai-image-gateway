@@ -1,6 +1,6 @@
 # 验证
 
-运行环境为 Node.js 24，依赖由 package-lock.json 和 npm ci 固定。
+本机开发和 CI 使用 `.nvmrc` 指定的 Node.js 26，依赖由 package-lock.json 和 npm ci 固定。
 
 ```bash
 npm ci

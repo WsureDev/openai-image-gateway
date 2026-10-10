@@ -1,10 +1,32 @@
+# Dependencies and generated output
 node_modules/
 dist/
+coverage/
+*.tsbuildinfo
+.cache/
+
+# Local credentials and runtime state
 data/
 .env
 .env.*
 !.env.example
+secrets/
+*.pem
+*.key
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite-journal
 *.log
+
+# Local tooling and editor files
+/.aws/
+/.codex/
+/.agents/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
